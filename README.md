@@ -97,3 +97,11 @@ This crate is a leaf dependency — it doesn't depend on other ternary crates.
 ## License
 
 MIT
+
+## See Also
+- **ternary-bus** — related
+- **ternary-channel** — related
+- **ternary-room** — related
+- **ternary-chronicle** — related
+- **ternary-replay** — related
+
