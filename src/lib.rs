@@ -233,7 +233,7 @@ mod tests {
     }
 
     #[test] fn bus_publish_and_subscribe() {
-        reset();
+        COUNTER.store(0, Ordering::SeqCst);
         let mut bus = EventBus::new(100);
         bus.subscribe_all(count_handler);
         bus.publish(Event::new("a", 0));
