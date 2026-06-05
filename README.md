@@ -1,107 +1,95 @@
-# ternary-event: Pub/sub event dispatch with ternary priorities
+# ternary-event
 
-An in-process event bus where every event carries one of three priorities — **Low**, **Normal**, or **Critical**. Subscribers filter by event type, priority, and source. An append-only history log enables replay for late joiners or debugging.
+**ternary-event: Pub/sub event dispatch with ternary priorities**
 
-## Why This Exists
+[![ternary](https://img.shields.io/badge/ecosystem-ternary-blue)](https://github.com/orgs/SuperInstance/repositories?q=ternary)
+[![tests](https://img.shields.io/badge/tests-20-green)]()
 
-In multi-agent systems, not all events are equal. A disk-full alert matters more than a heartbeat tick. Binary priority (high/low) isn't enough — you need a middle ground for normal operational events. Ternary priorities give you Low (informational), Normal (operational), and Critical (must-handle-now) without the overhead of arbitrary priority levels.
+## Overview
 
-## Core Concepts
+ternary-event: Pub/sub event dispatch with ternary priorities.
 
-- **Priority**: A ternary enum — `Low`, `Normal`, `Critical`. Ordered: `Low < Normal < Critical`.
-- **Event**: A typed payload with priority, source, and timestamp. The core unit of data flowing through the system.
-- **EventBus**: Central dispatcher. Publishers send events; subscribers with matching filters receive them synchronously.
-- **EventFilter**: Pattern matcher on event streams. Filter by type, minimum priority, and/or source. All conditions AND together.
-- **Subscription**: A registered listener with a filter and callback function pointer.
-- **EventHistory**: Append-only log with optional capacity cap. Supports full replay and filtered replay.
-- **EventEmitter**: A convenience trait for types that can produce events.
+An in-process event bus where every event carries a ternary priority
+(Low, Normal, Critical). Subscribers filter by type and priority, and
+an append-only history log enables replay for late joiners or debugging.
 
-## Quick Start
+## Architecture
+
+- **`Event`** — core data structure
+- **`EventFilter`** — core data structure
+- **`SubscriberId`** — core data structure
+- **`Subscription`** — core data structure
+- **`EventHistory`** — core data structure
+- **`EventBus`** — core data structure
+- **`Priority`** — state enumeration
+
+### Traits
+
+- **`EventEmitter`** — shared behavior contract
+
+### Key Functions
+
+- `new()`
+- `with_timestamp()`
+- `new()`
+- `event_type()`
+- `min_priority()`
+- `source()`
+- `matches()`
+- `new()`
+- `with_capacity()`
+- `append()`
+- ... and 13 more
+
+## Why Ternary?
+
+The balanced ternary system {-1, 0, +1} (also known as Z₃) is the mathematically optimal discrete encoding:
+- **More expressive than binary**: three states capture positive, neutral, and negative
+- **Natural for decisions**: accept/reject/abstain, buy/hold/sell, agree/disagree/neutral
+- **Self-balancing**: the 0 state acts as a universal screen, preventing pathological lock-in
+- **Z₃ cyclic dynamics**: rock-paper-scissors is the only natural coordination mechanism
+
+## Stats
+
+| Metric | Value |
+|--------|-------|
+| Lines of Rust | 528 |
+| Test count | 20 |
+| Public types | 7 |
+| Public functions | 23 |
+
+## Ecosystem
+
+This crate is part of the **[SuperInstance Ternary Fleet](https://github.com/orgs/SuperInstance/repositories?q=ternary)**:
+
+- **[ternary-core](https://github.com/SuperInstance/ternary-core)** — shared traits and Z₃ arithmetic
+- **[ternary-grid](https://github.com/SuperInstance/ternary-grid)** — spatial grid with {-1, 0, +1} cells
+- **[ternary-graph](https://github.com/SuperInstance/ternary-graph)** — ternary-weighted graph algorithms
+- **[ternary-automata](https://github.com/SuperInstance/ternary-automata)** — three-state cellular automata
+- **[ternary-compiler](https://github.com/SuperInstance/ternary-compiler)** — expression compiler and optimizer
+
+200+ crates. 4,300+ tests. One pattern.
+
+## Research Context
+
+The ternary approach connects to several active research areas:
+- **Ternary Neural Networks** (TNNs): weights constrained to {-1, 0, +1} for efficient inference
+- **Huawei's ternary chip**: 7nm ternary silicon with 60% less power consumption
+- **Active inference**: free energy minimization naturally maps to ternary action selection
+- **Cyclic dominance**: RPS dynamics maintain biodiversity in spatial ecology
+- **Z₃ group theory**: the only algebraic group on three elements is cyclic addition mod 3
+
+## Usage
 
 ```toml
-# Cargo.toml
 [dependencies]
-ternary-event = "0.1"
+ternary-event = "0.1.0"
 ```
 
 ```rust
-use ternary_event::*;
-
-fn main() {
-    let mut bus = EventBus::new();
-
-    // Subscribe to critical alerts from the monitor
-    let id = bus.subscribe(
-        EventFilter::new()
-            .event_type("alert")
-            .min_priority(Priority::Critical),
-        |event| println!("ALERT: {}", event.payload),
-    );
-
-    // Publish an event
-    bus.publish(Event::new("alert", "disk 95% full", Priority::Critical, "monitor"));
-
-    // Later, unsubscribe
-    bus.unsubscribe(id);
-}
+use ternary_event;
 ```
-
-## API Overview
-
-| Type | Description |
-|------|-------------|
-| `Priority` | Ternary enum: Low, Normal, Critical (ordered) |
-| `Event` | Typed payload with priority, source, and timestamp |
-| `EventFilter` | Pattern matcher: filter by type, min priority, source |
-| `EventBus` | Central pub/sub dispatcher with history |
-| `Subscription` | Registered listener (id + filter + callback) |
-| `EventHistory` | Append-only log with capacity and replay |
-| `EventEmitter` | Trait for types that produce events |
-
-## How It Works
-
-`EventBus` maintains a `HashMap` of subscriptions indexed by ID. When `publish` is called, it iterates all subscriptions, checks each filter against the event, and calls matching callbacks synchronously. The event is then appended to the internal `EventHistory`.
-
-`EventFilter` uses builder-pattern methods (`event_type()`, `min_priority()`, `source()`) that AND together. An empty filter matches everything.
-
-`EventHistory` is a `Vec` with an optional capacity cap. When full, the oldest event is evicted (FIFO). The `replay` method returns an iterator; `replay_filtered` applies an `EventFilter`.
-
-Callbacks are function pointers (`fn(&Event)`), not closures, to keep the design simple and `Clone`-free.
-
-## Known Limitations
-
-- **Synchronous dispatch only**: All callbacks run on the calling thread. Long-running callbacks will block the publisher. No async support.
-- **Function pointers, not closures**: You can't capture state in callbacks. Use `static` atomics or external state for accumulation.
-- **No error handling in callbacks**: A panicking callback will propagate the panic through `publish`. There's no catch-and-continue mechanism.
-- **Linear fan-out**: Every publish iterates all subscriptions. O(n) in subscription count. Fine for hundreds; not ideal for millions.
-- **History eviction is O(n)**: `Vec::remove(0)` shifts all elements. Acceptable for small-to-medium histories.
-- **No wildcard event types**: Filters match exact strings. No glob or regex support.
-
-## Use Cases
-
-- **Agent coordination**: Agents publish task-completed events; supervisors subscribe to track progress.
-- **System monitoring**: Sensors emit events with Critical priority for threshold breaches; alerting systems subscribe accordingly.
-- **Game engine events**: Entity actions published to a bus; UI, AI, and scoring systems each subscribe with different filters.
-- **Audit logging**: All events are recorded in history. Compliance systems replay the log to reconstruct timelines.
-
-## Ecosystem Context
-
-Part of the **SuperInstance** ternary crate family. Relates to:
-
-- **ternary-command**: Command execution can publish events (e.g., "command failed")
-- **ternary-trust**: Trust events (betrayal, cooperation) can flow through the event bus
-- **ternary-inventory**: Inventory changes published as events for dependent systems
-
-This crate is a leaf dependency — it doesn't depend on other ternary crates.
 
 ## License
 
 MIT
-
-## See Also
-- **ternary-bus** — related
-- **ternary-channel** — related
-- **ternary-room** — related
-- **ternary-chronicle** — related
-- **ternary-replay** — related
-
