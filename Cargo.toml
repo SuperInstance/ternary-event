@@ -1,0 +1,8 @@
+[package]
+name = "ternary-event"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Pub/sub event dispatch for ternary agents"
+
+[dependencies]
