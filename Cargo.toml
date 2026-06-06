@@ -4,3 +4,6 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 description = "Pub/sub event dispatch with ternary priorities for SuperInstance"
+
+[dependencies]
+ternary-types = { git = "https://github.com/SuperInstance/ternary-types.git", features = ["std"] }
