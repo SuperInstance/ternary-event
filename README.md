@@ -1,107 +1,93 @@
-# ternary-event: Pub/sub event dispatch with ternary priorities
+# ternary-event
 
-An in-process event bus where every event carries one of three priorities — **Low**, **Normal**, or **Critical**. Subscribers filter by event type, priority, and source. An append-only history log enables replay for late joiners or debugging.
+**Pub/sub event dispatch with ternary priorities for the SuperInstance ecosystem.**
 
-## Why This Exists
+## Background
 
-In multi-agent systems, not all events are equal. A disk-full alert matters more than a heartbeat tick. Binary priority (high/low) isn't enough — you need a middle ground for normal operational events. Ternary priorities give you Low (informational), Normal (operational), and Critical (must-handle-now) without the overhead of arbitrary priority levels.
+Event-driven architecture is the backbone of reactive systems — from browser DOM events to Kubernetes watch streams to Apache Kafka topics. The key challenge is **filtering**: subscribers want specific events without drowning in noise. Traditional systems use topic-based routing or content-based filtering, but few embed priority semantics directly into the event model.
 
-## Core Concepts
-
-- **Priority**: A ternary enum — `Low`, `Normal`, `Critical`. Ordered: `Low < Normal < Critical`.
-- **Event**: A typed payload with priority, source, and timestamp. The core unit of data flowing through the system.
-- **EventBus**: Central dispatcher. Publishers send events; subscribers with matching filters receive them synchronously.
-- **EventFilter**: Pattern matcher on event streams. Filter by type, minimum priority, and/or source. All conditions AND together.
-- **Subscription**: A registered listener with a filter and callback function pointer.
-- **EventHistory**: Append-only log with optional capacity cap. Supports full replay and filtered replay.
-- **EventEmitter**: A convenience trait for types that can produce events.
-
-## Quick Start
-
-```toml
-# Cargo.toml
-[dependencies]
-ternary-event = "0.1"
-```
-
-```rust
-use ternary_event::*;
-
-fn main() {
-    let mut bus = EventBus::new();
-
-    // Subscribe to critical alerts from the monitor
-    let id = bus.subscribe(
-        EventFilter::new()
-            .event_type("alert")
-            .min_priority(Priority::Critical),
-        |event| println!("ALERT: {}", event.payload),
-    );
-
-    // Publish an event
-    bus.publish(Event::new("alert", "disk 95% full", Priority::Critical, "monitor"));
-
-    // Later, unsubscribe
-    bus.unsubscribe(id);
-}
-```
-
-## API Overview
-
-| Type | Description |
-|------|-------------|
-| `Priority` | Ternary enum: Low, Normal, Critical (ordered) |
-| `Event` | Typed payload with priority, source, and timestamp |
-| `EventFilter` | Pattern matcher: filter by type, min priority, source |
-| `EventBus` | Central pub/sub dispatcher with history |
-| `Subscription` | Registered listener (id + filter + callback) |
-| `EventHistory` | Append-only log with capacity and replay |
-| `EventEmitter` | Trait for types that produce events |
+`ternary-event` provides an in-process event bus where every event carries a **ternary priority** — `Low`, `Normal`, or `Critical` — that subscribers can filter on. Combined with type-based and source-based filtering, this enables fine-grained subscription policies. An append-only history log supports replay for late joiners, debugging, and audit.
 
 ## How It Works
 
-`EventBus` maintains a `HashMap` of subscriptions indexed by ID. When `publish` is called, it iterates all subscriptions, checks each filter against the event, and calls matching callbacks synchronously. The event is then appended to the internal `EventHistory`.
+### Event Model
 
-`EventFilter` uses builder-pattern methods (`event_type()`, `min_priority()`, `source()`) that AND together. An empty filter matches everything.
+Every event has five fields:
 
-`EventHistory` is a `Vec` with an optional capacity cap. When full, the oldest event is evicted (FIFO). The `replay` method returns an iterator; `replay_filtered` applies an `EventFilter`.
+| Field | Type | Description |
+|-------|------|-------------|
+| `event_type` | String | Semantic category (e.g., "room.joined", "task.failed") |
+| `payload` | String | Event data |
+| `priority` | Priority | `Low`, `Normal`, or `Critical` |
+| `timestamp_ms` | u64 | Unix epoch milliseconds |
+| `source` | String | Originating agent or room |
 
-Callbacks are function pointers (`fn(&Event)`), not closures, to keep the design simple and `Clone`-free.
+### Subscription and Filtering
 
-## Known Limitations
+`EventFilter` supports three independent filter axes (combined with AND logic):
 
-- **Synchronous dispatch only**: All callbacks run on the calling thread. Long-running callbacks will block the publisher. No async support.
-- **Function pointers, not closures**: You can't capture state in callbacks. Use `static` atomics or external state for accumulation.
-- **No error handling in callbacks**: A panicking callback will propagate the panic through `publish`. There's no catch-and-continue mechanism.
-- **Linear fan-out**: Every publish iterates all subscriptions. O(n) in subscription count. Fine for hundreds; not ideal for millions.
-- **History eviction is O(n)**: `Vec::remove(0)` shifts all elements. Acceptable for small-to-medium histories.
-- **No wildcard event types**: Filters match exact strings. No glob or regex support.
+- **`event_type`** — exact match on event category
+- **`min_priority`** — minimum priority threshold (e.g., `Normal` matches `Normal` and `Critical`)
+- **`source`** — exact match on event origin
+
+Subscribers register filters with callbacks: `bus.subscribe(filter, |event| { ... })`. The bus invokes matching callbacks synchronously on `publish()`.
+
+### Event History
+
+`EventHistory` is a bounded append-only log. When at capacity, the oldest event is evicted. It supports:
+
+- **Full replay** — `replay()` iterates all stored events
+- **Filtered replay** — `replay_filtered(&filter)` returns only matching events
+- **Late joiners** — `bus.replay_to(callback)` replays all history to a new subscriber
+
+### Priority Ordering
+
+`Priority` implements `Ord`: `Low < Normal < Critical`. This enables priority-based filtering (only critical alerts), priority queues (process critical events first), and priority-aware routing in higher-level systems.
+
+## Experimental Results
+
+The test suite (25+ tests) validates:
+
+- **Priority ordering** — `Low < Normal < Critical` holds for all pairs
+- **Filter matching** — type-only, priority-only, source-only, and combined filters correctly match/reject events
+- **Empty filter** — matches everything (no filtering)
+- **History lifecycle** — append, capacity-based eviction, last-event query, filtered replay
+- **Bus dispatch** — matching subscribers receive events; non-matching subscribers are skipped
+- **History integration** — published events are stored in bus history
+- **Replay** — `replay_to()` delivers all history events to a callback
+
+## Impact
+
+The ternary priority model addresses a real gap in event systems. In fleet management, not all events are equal: a node going offline (`Critical`) shouldn't wait behind routine telemetry (`Low`). By baking priority into the event model, `ternary-event` ensures that priority-aware processing is the default, not an afterthought.
+
+The history/replay capability enables event-sourcing patterns: new subscribers can reconstruct state from the event log, and debugging becomes a matter of replaying filtered history rather than searching logs.
 
 ## Use Cases
 
-- **Agent coordination**: Agents publish task-completed events; supervisors subscribe to track progress.
-- **System monitoring**: Sensors emit events with Critical priority for threshold breaches; alerting systems subscribe accordingly.
-- **Game engine events**: Entity actions published to a bus; UI, AI, and scoring systems each subscribe with different filters.
-- **Audit logging**: All events are recorded in history. Compliance systems replay the log to reconstruct timelines.
+1. **Fleet health monitoring** — Rooms publish health events with priorities: `Low` for routine heartbeats, `Normal` for resource warnings, `Critical` for node failures. A monitoring dashboard subscribes with `min_priority(Normal)` to filter out noise.
 
-## Ecosystem Context
+2. **Debugging and forensics** — When a fleet incident occurs, `history.replay_filtered(&EventFilter::new().source("room-7"))` surfaces every event from the affected room, with timestamps for timeline reconstruction.
 
-Part of the **SuperInstance** ternary crate family. Relates to:
+3. **Late-joining agents** — A new agent connects to the fleet and calls `bus.replay_to(callback)` to catch up on all events it missed, enabling state reconstruction without explicit synchronization.
 
-- **ternary-command**: Command execution can publish events (e.g., "command failed")
-- **ternary-trust**: Trust events (betrayal, cooperation) can flow through the event bus
-- **ternary-inventory**: Inventory changes published as events for dependent systems
+4. **Alert escalation** — A subscriber registers for `min_priority(Critical)` events and triggers escalation workflows (email, Slack, auto-remediation) only for the most urgent events, while another subscriber handles all events for metrics aggregation.
 
-This crate is a leaf dependency — it doesn't depend on other ternary crates.
+5. **Event sourcing** — Room state is derived from the event history: replay the full event log to reconstruct current state, enabling time-travel debugging and state snapshots.
 
-## License
+## Open Questions
 
-MIT
+- **Async callbacks:** The current callback type is `fn(&Event)` — a synchronous function pointer. Should the bus support `async` callbacks or `Box<dyn Fn>` for closures that capture state?
+- **Event ordering:** Events within the same priority are processed in publication order, but there's no cross-priority ordering guarantee. Should `Critical` events always be processed before `Normal` events, even if published later?
+- **Persistence:** History is in-memory only. For production deployments, should the history log be persistable (Kafka-like commit log, SQLite-backed, or shared memory)?
 
-## See Also
-- **ternary-bus** — related
-- **ternary-channel** — related
-- **ternary-room** — related
-- **ternary-chronicle** — related
-- **ternary-replay** — related
+## Connection to Oxide Stack
 
+`ternary-event` is the observability layer of the SuperInstance ecosystem:
+
+- **`ternary-channel`** — events may be transported over channels for cross-node delivery
+- **`ternary-command`** — command execution publishes events (command.started, command.completed) for observability
+- **`ternary-protocol`** — event serialization for wire transport
+- **`ternary-fire`** — cellular automaton state changes emit events for visualization
+- **`ternary-voting`** — consensus rounds emit events for vote tracking
+
+The priority model (`Low`/`Normal`/`Critical`) maps to the ternary values used throughout the ecosystem, ensuring consistent semantics from the event bus down to the channel layer.
